@@ -23,7 +23,7 @@ const messageHistory = [
 
 // Trim message history to stay within token limits
 function trimMessageHistory() {
-  const maxMessages = 15; // Adjust based on token limit
+  const maxMessages = 30; // Adjust based on token limit
   while (messageHistory.length > maxMessages) {
     messageHistory.splice(1, 1); // Keep the system prompt, remove oldest messages
   }
@@ -101,7 +101,7 @@ async function chatWithAssistant() {
   };
 
   while (true) {
-    const userMessage = await askQuestion(chalk.green("You: "));
+    const userMessage = await askQuestion(chalk.green(`You(${messageHistory.length}): `));
     if (userMessage.toLowerCase() === "exit") {
       console.log(chalk.yellow("Goodbye!"));
       rl.close();
@@ -114,7 +114,7 @@ async function chatWithAssistant() {
       const assistantResponse = await getAssistantResponse(userMessage); // Simulating the request
       stopSpinner(); // Stop the spinner
       if (assistantResponse) {
-        console.log(chalk.blueBright(`>>>>: ${assistantResponse}`));
+        console.log(chalk.blueBright(`>>>>(${messageHistory.length}): ${assistantResponse}`));
       }
     } catch (error) {
       stopSpinner(); // Ensure spinner stops even on error
