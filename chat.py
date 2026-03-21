@@ -36,6 +36,8 @@ class Ollama:
         self.context_size = 0
         self.spinner_running = False
         self.spinner_thread = None
+        self.history_file = self.prompt_file.replace('prompt', 'history').replace('.txt', '.json')
+        self.load_history()
 
     def load_prompt(self):
         try:
@@ -45,22 +47,51 @@ class Ollama:
             print(colored(f"Error loading system prompt: {error}", "red"))
             sys.exit(1)
 
+    def load_history(self):
+        try:
+            with open(self.history_file, 'r', encoding='utf-8') as f:
+                self.message_history += json.load(f)
+        except FileNotFoundError:
+            pass
+
+    def save_history(self):
+        with open(self.history_file, 'w', encoding='utf-8') as f:
+            json.dump(self.message_history[1:], f, ensure_ascii=False)
+
     def remove_oldest_message(self, max_messages=30):
         # This does not remove system message which is always 0
         while len(self.message_history) > max_messages:
             self.message_history.pop(1)
 
     def speak(self, text):
-        # Remove emojis
-        text = re.sub(r"[^\w\s,.!?']", ".", text)
-        # Remove text between ** (including **)
-        text = re.sub(r'\*.*?\*', '.', text)
-        # Remove extra whitespace
+        # Treat newlines as sentence endings
+        text = re.sub(r'([^.!?,])\n', r'\1. ', text)
+        text = re.sub(r'\n', ' ', text)
+        # Replace & with comma
+        text = re.sub(r'\s*&\s*', ', ', text)
+        # Remove *markdown*
+        text = re.sub(r'\*+.*?\*+', '', text)
+        # Special chars between two words → sentence dot
+        text = re.sub(r'(?<=[a-zA-Z0-9])\s*[^\w\s,.!?\'-]+\s*(?=[a-zA-Z0-9])', '. ', text)
+        # Remaining special chars → remove
+        text = re.sub(r'[^\w\s,.!?\'-]', '', text)
+        # Normalize ellipsis to single dot
+        text = re.sub(r'\.{2,}', '.', text)
+        # Deduplicate punctuation: RIGHT?? → RIGHT?
+        text = re.sub(r'([!?])\1+', r'\1', text)
+        # Lowercase everything
+        text = text.lower()
+        # Clean extra whitespace
         text = re.sub(r'\s+', ' ', text).strip()
-        # Remove trailing dots
-        text = re.sub(r"\.+$", "", text)
+        # Capitalize sentence starts
+        text = re.sub(r'(?:^|(?<=[.!?])\s)(\w)', lambda m: m.group(0).upper(), text)
+        # Remove spaces before punctuation
+        text = re.sub(r'\s([.,!?\'"])', r'\1', text)
+        # Ensure ends with sentence terminator
+        if text and text[-1] not in '.!?':
+            text += '.'
         try:
-            requests.post("http://127.0.0.1:5001/speak", json={"text": text}, timeout=1)
+            requests.post("http://127.0.0.1:5001/speak", json={"text": text, "lang": "cori"}, timeout=1)
         except:
             pass
 
@@ -176,12 +207,18 @@ class Ollama:
             try:
                 user_message = input(colored(f"You({self.context_size}): ", "green"))
                 if user_message.lower() == "/exit":
+                    self.save_history()
                     print(colored("Goodbye!", "yellow"))
                     break
+                if user_message.lower() == "/reset":
+                    self.message_history = [{"role": "system", "content": self.system_prompt}]
+                    print(colored("Conversation reset.", "cyan"))
+                    continue
                 assistant_response = self.send(user_message)
                 self.speak(assistant_response)
                 print('')
             except KeyboardInterrupt:
+                self.save_history()
                 print(colored("\nGoodbye!", "yellow"))
                 break
 

@@ -105,7 +105,7 @@ def _worker():
 
 class SpeakHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        print(f"[server] {args[0]} {args[1]}")
+        pass
 
     def do_POST(self):
         if self.path != "/speak":
@@ -120,6 +120,7 @@ class SpeakHandler(BaseHTTPRequestHandler):
             return
 
         text = body.get("text", "").strip()
+        print(f"[speak] {text!r}")
         if not text:
             self._respond(400, "'text' is required")
             return

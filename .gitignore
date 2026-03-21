@@ -49,6 +49,9 @@ Thumbs.db
 coverage/
 .nyc_output/
 
+# Chat history
+history.*.json
+
 # Generated files
 *.tgz
 
