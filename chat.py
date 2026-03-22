@@ -1,50 +1,63 @@
 import requests
 import sys
-import os
 import json
 import time
-from termcolor import colored
 import threading
-from pprint import pprint
 import re
 from datetime import datetime
 
+from rich.console import Console
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.theme import Theme
+
+theme = Theme({
+    "user":      "bold green",
+    "assistant": "bold blue",
+    "info":      "cyan",
+    "error":     "bold red",
+    "dim":       "dim white",
+    "warn":      "bold yellow",
+})
+
+console = Console(theme=theme)
+
+CONTEXT_WARN = 3000
+
+
 class Ollama:
-    def __init__(self, 
-                 model_name, 
-                 api_url = 'http://127.0.0.1:11434', 
-                 prompt_file = "./prompt.txt",
-                 name = None,
-                 color = 'blue',
-                 stream_mode = True,
-                 json_mode = False
+    def __init__(self,
+                 model_name,
+                 api_url='http://127.0.0.1:11434',
+                 prompt_file="./prompt.txt",
+                 name=None,
+                 stream_mode=True,
+                 json_mode=False
                  ):
-        # config
-        self.name = name
-        self.color = color
-        self.api_url = api_url
-        self.model_name = model_name
+        self.name        = name or "Assistant"
+        self.api_url     = api_url
+        self.model_name  = model_name
         self.prompt_file = prompt_file
         self.stream_mode = stream_mode
-        self.json_mode = json_mode
+        self.json_mode   = json_mode
+        self.voice       = "cori"
+        self.muted       = False
         self.system_prompt = self.load_prompt()
         if self.json_mode:
             self.stream_mode = False
-        # private
-        self.message_history = []
-        self.message_history.append({"role": "system", "content": self.system_prompt})
-        self.context_size = 0
+        self.message_history = [{"role": "system", "content": self.system_prompt}]
+        self.context_size    = 0
         self.spinner_running = False
-        self.spinner_thread = None
-        self.history_file = self.prompt_file.replace('prompt', 'history').replace('.txt', '.json')
+        self.spinner_thread  = None
+        self.history_file    = self.prompt_file.replace('prompt', 'history').replace('.txt', '.json')
         self.load_history()
 
     def load_prompt(self):
         try:
-            with open(self.prompt_file, "r", encoding="utf-8") as file:
-                return file.read().strip()
-        except Exception as error:
-            print(colored(f"Error loading system prompt: {error}", "red"))
+            with open(self.prompt_file, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as e:
+            console.print(f"Error loading system prompt: {e}", style="error")
             sys.exit(1)
 
     def load_history(self):
@@ -59,11 +72,12 @@ class Ollama:
             json.dump(self.message_history[1:], f, ensure_ascii=False)
 
     def remove_oldest_message(self, max_messages=30):
-        # This does not remove system message which is always 0
         while len(self.message_history) > max_messages:
             self.message_history.pop(1)
 
     def speak(self, text):
+        if self.muted:
+            return
         # Treat newlines as sentence endings
         text = re.sub(r'([^.!?,])\n', r'\1. ', text)
         text = re.sub(r'\n', ' ', text)
@@ -91,21 +105,21 @@ class Ollama:
         if text and text[-1] not in '.!?':
             text += '.'
         try:
-            requests.post("http://127.0.0.1:5001/speak", json={"text": text, "lang": "cori"}, timeout=1)
-        except:
+            requests.post("http://127.0.0.1:5001/speak", json={"text": text, "lang": self.voice}, timeout=1)
+        except Exception:
             pass
 
     def start_spinner(self):
-        spinner_frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
-        frame_index = 0
+        frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
+        idx = 0
         self.spinner_running = True
 
         def spin():
-            nonlocal frame_index
+            nonlocal idx
             while self.spinner_running:
-                sys.stdout.write(colored(f"\r{spinner_frames[frame_index % len(spinner_frames)]} ", self.color))
+                sys.stdout.write(f"\r\033[34m{self.name}: {frames[idx % len(frames)]} \033[0m")
                 sys.stdout.flush()
-                frame_index += 1
+                idx += 1
                 time.sleep(0.1)
 
         self.spinner_thread = threading.Thread(target=spin)
@@ -117,20 +131,8 @@ class Ollama:
             if self.spinner_thread:
                 self.spinner_thread.join()
                 self.spinner_thread = None
-                sys.stdout.write("\r")
+                sys.stdout.write(f"\r{' ' * (len(self.name) + 4)}\r")
                 sys.stdout.flush()
-
-    def handle_tool_call(self, message):
-        pass
-        # if 'tool_calls' in message:
-        #     for tool_call in message['tool_calls']:
-        #         if 'function' in tool_call:
-        #             func = tool_call['function']
-        #             if 'name' in func and 'arguments' in func:
-        #                 print(colored(func['name']+'('+str(func['arguments'])+')', 'magenta'))
-        #                 self.message_history.append({"role": "assistant", "tool_calls": message['tool_calls']})
-        #                 self.tool_function = func['name'] 
-
 
     def send(self, message):
         self.remove_oldest_message()
@@ -140,114 +142,147 @@ class Ollama:
                 "model": self.model_name,
                 "messages": self.message_history,
                 "stream": self.stream_mode,
-                "options": {"penalize_newline": True, "temperature": 10},
+                "options": {
+                    "temperature": 0.9,          # 0.8–1.1 sweet spot for creative but coherent dirty talk
+                    "top_p": 0.95,
+                    "min_p": 0.05,               # helps avoid total garbage tokens
+                    "repeat_penalty": 1.15,      # mild anti-repetition without killing flow
+                    # optionally: "presence_penalty": 0.3,   # discourages introducing new random topics
+                    # "frequency_penalty": 0.2,              # lightly penalizes word reuse
+                },
             }
             if self.json_mode:
                 payload['format'] = "json"
 
+            t_start = time.time()
             self.start_spinner()
-            with requests.post(
-                self.api_url+'/api/chat',
-                json=payload,
-                stream=self.stream_mode
-            ) as response:
-                
-                self.stop_spinner() 
+            with requests.post(self.api_url + '/api/chat', json=payload, stream=self.stream_mode) as response:
+                self.stop_spinner()
                 response.raise_for_status()
-                # stram mode
+
                 if self.stream_mode:
                     assistant_message = ""
-                    if self.name:
-                        sys.stdout.write(colored(self.name+': ', self.color))
+                    sys.stdout.write("\r")
+                    sys.stdout.flush()
+                    console.print(f"[assistant]{self.name}:[/assistant] ", end="")
                     for line in response.iter_lines(decode_unicode=True):
                         if line:
                             chunk = json.loads(line)
-                            message = chunk.get("message", {})
-                            if 'content' in message:                                    
-                                assistant_message += message['content']
-                                sys.stdout.write(colored(message['content'], self.color))
-                                sys.stdout.flush()
-
-                            if 'done' in chunk and chunk['done']:
+                            msg = chunk.get("message", {})
+                            if 'content' in msg:
+                                assistant_message += msg['content']
+                                console.print(msg['content'], end="", style="blue", markup=False)
+                            if chunk.get('done'):
                                 self.context_size = chunk.get('prompt_eval_count', self.context_size)
-                    
+                    elapsed = time.time() - t_start
+                    console.print(f"  [dim]({elapsed:.1f}s)[/dim]")
                     assistant_message = assistant_message.strip()
                     if assistant_message:
                         self.message_history.append({"role": "assistant", "content": assistant_message})
-                    print('')
                     return assistant_message
-                
-                # regular non stream mode
+
                 else:
-                    
-                    response_data = response.json()
-                    message = response_data.get("message", {})
-                    pprint(message)
-                    if 'content' in message:                                    
-                        assistant_message = message['content'].strip()
+                    data = response.json()
+                    msg = data.get("message", {})
+                    if 'content' in msg:
+                        assistant_message = msg['content'].strip()
                         self.message_history.append({"role": "assistant", "content": assistant_message})
-                        print(colored(assistant_message, self.color))
-
-                    self.context_size = response_data.get('prompt_eval_count', self.context_size)
-                    
-                    # pprint(self.message_history)
-
+                        console.print(assistant_message, style="blue")
+                    self.context_size = data.get('prompt_eval_count', self.context_size)
                     return assistant_message
+
         except KeyboardInterrupt:
-            exit()
             raise
-        except Exception as error:
-            print(colored(f"Error: {error.response.text}", "red"))
+        except Exception as e:
+            console.print(f"Error: {e}", style="error")
         finally:
-            self.stop_spinner()  # Stop spinner in all cases
+            self.stop_spinner()
 
     def chat(self):
-        print(colored("Say hi to your virtual assistant! Type '/exit' to quit.\n", "cyan"))
+        history_count = len(self.message_history) - 1
+        history_note  = f"[dim]{history_count} messages loaded[/dim]" if history_count else ""
+
+        console.print(Panel(
+            f"[assistant]{self.name}[/assistant]  [dim]|[/dim]  [dim]{self.model_name}[/dim]  [dim]|[/dim]  [dim]{self.voice}[/dim]"
+            + (f"\n{history_note}" if history_note else ""),
+            subtitle="[dim]/help for commands[/dim]",
+            border_style="blue",
+        ))
+
         while True:
             try:
-                user_message = input(colored(f"You({self.context_size}): ", "green"))
-                if user_message.lower() == "/exit":
-                    self.save_history()
-                    print(colored("Goodbye!", "yellow"))
-                    break
-                if user_message.lower() == "/reset":
-                    self.message_history = [{"role": "system", "content": self.system_prompt}]
-                    print(colored("Conversation reset.", "cyan"))
+                ts_style = "warn" if self.context_size > CONTEXT_WARN else "dim"
+                console.print(Rule(f"[{ts_style}]{datetime.now().strftime('%H:%M')}[/{ts_style}]", style=ts_style))
+                user_message = console.input("[user]You[/user]: ")
+
+                if not user_message.strip():
                     continue
+
+                cmd = user_message.strip().lower()
+
+                if cmd == "/exit":
+                    self.save_history()
+                    console.print("Goodbye!", style="info")
+                    break
+
+                if cmd == "/reset":
+                    self.message_history = [{"role": "system", "content": self.system_prompt}]
+                    console.print("Conversation reset.", style="info")
+                    continue
+
+                if cmd == "/mute":
+                    self.muted = not self.muted
+                    state = "muted" if self.muted else "unmuted"
+                    console.print(f"TTS {state}.", style="info")
+                    continue
+
+                if cmd.startswith("/voice "):
+                    self.voice = cmd.split(" ", 1)[1].strip()
+                    console.print(f"Voice set to [bold]{self.voice}[/bold].", style="info")
+                    continue
+
+                if cmd == "/retry":
+                    # Remove last user + assistant exchange and resend
+                    for _ in range(2):
+                        if len(self.message_history) > 1:
+                            self.message_history.pop()
+                    last_user = next(
+                        (m["content"] for m in reversed(self.message_history) if m["role"] == "user"),
+                        None
+                    )
+                    if not last_user:
+                        console.print("Nothing to retry.", style="info")
+                        continue
+                    self.message_history.pop()  # remove that user message too so send() re-adds it
+                    user_message = last_user
+
+                if cmd == "/help":
+                    console.print(Panel(
+                        "[dim]/help[/dim]          show this message\n"
+                        "[dim]/reset[/dim]         clear conversation history\n"
+                        "[dim]/mute[/dim]          toggle TTS on/off\n"
+                        "[dim]/voice [name][/dim]  switch voice (cori, jenny, amy)\n"
+                        "[dim]/retry[/dim]         resend last message\n"
+                        "[dim]/exit[/dim]          save history and quit",
+                        title="Commands", border_style="dim"
+                    ))
+                    continue
+
                 assistant_response = self.send(user_message)
-                self.speak(assistant_response)
-                print('')
+                if assistant_response:
+                    self.speak(assistant_response)
+
             except KeyboardInterrupt:
                 self.save_history()
-                print(colored("\nGoodbye!", "yellow"))
+                console.print("\nGoodbye!", style="info")
                 break
 
 
 if __name__ == "__main__":
-
+    persona = sys.argv[1] if len(sys.argv) > 1 else "anna"
     client = Ollama(
         model_name="artifish/llama3.2-uncensored",
-        # model_name="mistral-nemo",
-        # model_name="julia:latest",
-        prompt_file='prompt.anna.txt'
+        prompt_file=f'prompt.{persona}.txt',
+        name=persona.capitalize(),
     )
     client.chat()
-
-    # client1 = Ollama(
-    #     model_name="artifish/llama3.2-uncensored",
-    #     prompt_file="prompt.universe.txt",
-    #     name='Anna'
-    # )
-    # client1.name='Anna'
-    # client2 = Ollama(
-    #     model_name="artifish/llama3.2-uncensored",
-    #     prompt_file="prompt.universe.txt",
-    #     name='Miranda',
-    #     color='green'
-    # )
-    # client2.color='green'
-    # client2.name='Miranda'
-    # message = 'What is purpose of universe?'
-    # while True:
-    #     message = client1.send(message)
-    #     message = client2.send(message)
