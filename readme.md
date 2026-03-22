@@ -1,52 +1,101 @@
 # vgirl
 
-A local AI voice assistant — text chat powered by Ollama with real-time text-to-speech via Piper.
+A local AI girlfriend that talks back. Text chat through Ollama, real voice through Piper TTS.
+Runs entirely on your machine. No cloud. No subscriptions. No judgment.
 
 ![Chat Screenshot](./readme.png)
 
 ---
 
-## How it works
+## What's going on here
 
-- `chat.py` — sends messages to a local Ollama model and streams the response to the terminal
-- `speak.py` — HTTP server that receives text and speaks it aloud using Piper TTS
-- The assistant's response is normalized (emojis stripped, punctuation cleaned) before being sent to Piper
+Two processes. Two terminals. One experience.
+
+**`speak.py`** — a tiny HTTP server that listens for text and reads it out loud using Piper TTS.
+Run this first and leave it alone.
+
+**`chat.py`** — streams responses from a local Ollama model to your terminal, then fires the text
+over to the speak server so she actually says it. Pick a persona with a CLI argument.
+That's it. That's the whole thing.
 
 ---
 
-## Prerequisites
+## What you need before you start
 
-- [Ollama](https://ollama.com) installed and running
-- [Piper TTS binary](https://github.com/rhasspy/piper/releases) — the standalone executable, not the Python package
-- Python 3.10+
-- A Piper voice model (`.onnx` + `.onnx.json`)
+- **Python 3.10+** — you probably have this
+- **[Ollama](https://ollama.com)** — runs the LLM locally
+- **[Piper TTS binary](https://github.com/rhasspy/piper/releases)** — the standalone executable,
+  NOT the PyPI package (`piper-tts`), those are different things and they will fight
+- **A Piper voice model** — a `.onnx` file and its matching `.onnx.json` config, placed in the
+  same folder as the piper binary
+- **pyaudio** — for actual audio playback (install separately, see below)
 
 ---
 
 ## Setup
 
-### 1. Install Ollama and pull the model
+### 1. Pull the model
 
 ```bash
 ollama pull artifish/llama3.2-uncensored
+```
+
+Then make sure Ollama is running:
+
+```bash
 ollama serve
 ```
 
-### 2. Install Piper binary
+It listens on `http://localhost:11434` by default. Don't touch that.
 
-Download the Piper binary for your platform from the [releases page](https://github.com/rhasspy/piper/releases) and extract it to a folder, e.g. `~/piper` or `D:\app\piper`.
+---
 
-Add that folder to your system `PATH` so `piper` is available globally.
+### 2. Get Piper
 
-> **Note:** Do not install `piper-tts` from PyPI — it conflicts with the binary.
+Download the binary for your platform from the
+[releases page](https://github.com/rhasspy/piper/releases). Extract it somewhere permanent,
+like `~/piper` or `D:\apps\piper`. Add that folder to your system `PATH`.
 
-### 3. Download a voice model
+Test it works:
 
-Place `.onnx` and `.onnx.json` files in the same folder as the Piper binary.
+```bash
+piper --version
+```
 
-Recommended voices:
-- **cori-high** (British female) — [brycebeattie.com/files/tts](https://brycebeattie.com/files/tts/)
-- **en_GB-jenny_dioco-medium** — [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices)
+If you get a version number, you're good. If you get "command not found", fix your PATH.
+
+---
+
+### 3. Get a voice
+
+Download a voice model from [rhasspy/piper-voices on HuggingFace](https://huggingface.co/rhasspy/piper-voices).
+You need two files per voice: `voicename.onnx` and `voicename.onnx.json`.
+
+Drop both files into the **same folder as the piper binary**.
+
+Voices that are already wired up in `speak.py`:
+
+| Key | Voice | Vibe |
+|-----|-------|------|
+| `cori` | cori-high.onnx | British female, clear and crisp |
+| `jenny` | en_GB-jenny_dioco-medium.onnx | British female, softer |
+| `amy` | en_US-amy-medium.onnx | American female, neutral |
+| `en` | cori-high.onnx | alias for cori, the default |
+
+The `cori-high` model is available at [brycebeattie.com/files/tts](https://brycebeattie.com/files/tts/).
+
+To add your own voice, edit the `MODELS` dict in `speak.py`:
+
+```python
+MODELS = {
+    "cori":  "cori-high.onnx",
+    "jenny": "en_GB-jenny_dioco-medium.onnx",
+    "amy":   "en_US-amy-medium.onnx",
+    "nova":  "en_US-nova-medium.onnx",   # <- your new voice
+}
+```
+
+---
 
 ### 4. Install Python dependencies
 
@@ -55,50 +104,92 @@ pip install -r requirements.txt
 pip install pyaudio
 ```
 
-### 5. Configure your assistant
-
-Edit `prompt.anna.txt` to define the assistant's personality and role. The file is loaded as the system prompt on startup.
-
-To use a different prompt file, change `prompt_file` in `chat.py`:
-
-```python
-client = Ollama(
-    model_name="artifish/llama3.2-uncensored",
-    prompt_file="prompt.anna.txt"
-)
-```
+`pyaudio` is kept separate because it sometimes needs extra system packages depending on your OS.
+On Windows it usually just works. On Linux you may need `portaudio19-dev` first.
 
 ---
 
 ## Running
 
-Start the TTS server in one terminal:
+You need two terminals. Open them. Keep them both open.
+
+**Terminal 1 — the voice server:**
 
 ```bash
 python speak.py --server
 ```
 
-Start the chat in another terminal:
+You'll see something like:
+```
+[server] Listening on http://localhost:5001/speak
+[server] Default lang: en (cori-high.onnx)
+```
+
+Leave it. Don't close it.
+
+**Terminal 2 — the chat:**
 
 ```bash
-python chat.py
+python chat.py          # starts as Anna (default)
+python chat.py mia      # starts as Mia
+python chat.py anna     # same as no argument
 ```
+
+A panel shows up with the persona name, model, and active voice. Start typing.
 
 ---
 
-## speak.py usage
+## Chat commands
+
+Type these during a conversation:
+
+| Command | What it does |
+|---------|--------------|
+| `/help` | Shows the command list |
+| `/mute` | Toggles TTS on/off — useful if speak.py isn't running |
+| `/voice cori` | Switch voice mid-conversation (cori, jenny, amy, ...) |
+| `/retry` | Scraps the last exchange and resends your message |
+| `/reset` | Wipes conversation history, keeps the system prompt |
+| `/exit` | Saves history and exits cleanly |
+
+Ctrl+C also saves history and exits cleanly.
+
+---
+
+## Personas
+
+Each persona is just a text file that becomes the system prompt.
+
+| File | Persona | Personality |
+|------|---------|-------------|
+| `prompt.anna.txt` | Anna | Bratty, short fuse, filthy when turned on |
+| `prompt.mia.txt` | Mia | Avoidant, sarcastic, ghosts and comes back |
+
+To add a new persona, create `prompt.yourname.txt` and run:
 
 ```bash
-# Speak directly
-python speak.py en "Hello there"
-python speak.py cori "Hey, how are you?"
+python chat.py yourname
+```
 
-# Start HTTP server (default port 5001)
-python speak.py --server
+That's it. The history file (`history.yourname.json`) is created automatically and restored on
+next run.
+
+---
+
+## speak.py standalone
+
+You can also use `speak.py` without the chat at all:
+
+```bash
+# Speak something directly from the command line
+python speak.py cori "Hey there"
+python speak.py jenny "Testing one two three"
+
+# Run the HTTP server on a different port
 python speak.py --server --port 5002
 ```
 
-HTTP API:
+The HTTP API if you want to hit it from anything else:
 
 ```bash
 curl -X POST http://localhost:5001/speak \
@@ -108,33 +199,37 @@ curl -X POST http://localhost:5001/speak \
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `text` | yes | Text to speak |
-| `lang` | no | Voice key (default: `en`). See `MODELS` in `speak.py` |
-| `model` | no | Direct path to a `.onnx` file |
+| `text` | yes | What to say |
+| `lang` | no | Voice key from `MODELS` (default: `en`) |
+| `model` | no | Direct path to a `.onnx` file, if you want to bypass the key lookup |
+
+Speak requests are queued — if the previous line hasn't finished playing, the next one waits.
+Nothing gets cut off.
 
 ---
 
-## Available voices
+## Conversation history
 
-Edit the `MODELS` dict in `speak.py` to add or change voices:
-
-```python
-MODELS = {
-    "en":    "cori-high.onnx",       # default
-    "cori":  "cori-high.onnx",
-    "jenny": "en_GB-jenny_dioco-medium.onnx",
-    "amy":   "en_US-amy-medium.onnx",
-    "ka":    "ka_GE-natia-medium.onnx",
-}
-```
+History is saved as JSON in the project folder (`history.anna.json`, `history.mia.json`, etc.)
+and excluded from git via `.gitignore`. On the next startup the last conversation is restored
+automatically. Use `/reset` to start fresh without deleting the file.
 
 ---
 
-## Chat commands
+## Troubleshooting
 
-| Command | Description |
-|---------|-------------|
-| `/reset` | Clear conversation history |
-| `/exit` | Save history and quit |
+**No audio / speak.py crashes on startup**
+→ Check that pyaudio is installed and that your system has a working audio output device.
 
-Conversation history is saved to `history.<name>.json` on exit and restored on next startup.
+**"Model not found"**
+→ The `.onnx` file isn't in the piper binary folder. Double-check the path.
+
+**"Piper not found"**
+→ `piper` (or `piper.exe`) isn't in your PATH. Add the folder that contains it.
+
+**Ollama connection refused**
+→ Run `ollama serve` first.
+
+**TTS fires but chat.py says it can't connect**
+→ Make sure `speak.py --server` is running before you start `chat.py`. `/mute` disables TTS
+if you just want to chat without voice.
